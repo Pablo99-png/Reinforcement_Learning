@@ -1,6 +1,8 @@
 import numpy as np
 import gym
 from tensorboardX import SummaryWriter
+import time
+import json
 
 import datetime
 from collections import namedtuple
@@ -15,15 +17,15 @@ from torch.nn.utils.clip_grad import clip_grad_norm_
 
 class A2C_policy(nn.Module):
     '''
-    Policy neural network
+    Policy neural network --- 15000 params ca.
     '''
     def __init__(self, input_shape, n_actions):
         super(A2C_policy, self).__init__()
 
         self.lp = nn.Sequential(
-            nn.Linear(input_shape[0], 32),
+            nn.Linear(input_shape[0], 256),
             nn.ReLU(),
-            nn.Linear(32, 32),
+            nn.Linear(256, 32),
             nn.ReLU())
 
         self.mean_l = nn.Linear(32, n_actions[0])
@@ -35,6 +37,7 @@ class A2C_policy(nn.Module):
         self.logstd = nn.Parameter(torch.zeros(n_actions[0]))
 
     def forward(self, x):
+        x.to(device)
         ot_n = self.lp(x.float())
         return F.tanh(self.mean_l(ot_n))
 
@@ -86,19 +89,21 @@ class Env:
         Execute the agent n_steps in the environment
         '''
         memories = []
+        startTime = time.time()
         for s in range(self.n_steps):
             self.n_iter += 1
 
             # get the agent policy
-            ag_mean = agent_policy(torch.tensor(self.obs))
+            obs = torch.tensor(self.obs).to(device)
+            ag_mean = agent_policy(obs) #rete policy
 
             # get an action following the policy distribution
             logstd = agent_policy.logstd.data.cpu().numpy()
             action = ag_mean.data.cpu().numpy() + np.exp(logstd) * np.random.normal(size=logstd.shape)
             #action = np.random.normal(loc=ag_mean.data.cpu().numpy(), scale=torch.sqrt(ag_var).data.cpu().numpy())
-            action = np.clip(action, -1, 1)
+            action = np.clip(action, -1.2, 1.2) # CAMBIATO DA 1 A 1.2
 
-            state_value = float(agent_value(torch.tensor(self.obs)))
+            state_value = float(agent_value(obs))
 
             # Perform a step in the environment
             new_obs, reward, done, _ = self.env.step(action)
@@ -116,7 +121,11 @@ class Env:
 
             if done:
                 print('#####',self.game_n, 'rew:', int(self.game_rew), int(np.mean(self.last_games_rews[-100:])), np.round(reward,2), self.n_iter)
-
+                if s%200 == 0:
+                  print(f"############### MEAN REWARD LAST 200 GAMES = {int(np.mean(self.last_games_rews[-200:]))} ###############")
+                  f =  open('rewardsNewPPO.json', 'a')
+                  json.dump({"step":s,"time":time.time()-startTime,"meanReward":int(np.mean(self.last_games_rews[-200:]))},f)
+                  f.close()
                 # reset the environment
                 self.obs = self.env.reset()
                 self.last_game_rew = self.game_rew
@@ -151,7 +160,11 @@ class Env:
 
 def log_policy_prob(mean, std, actions):
     # policy log probability
-    act_log_softmax = -((mean-actions)**2)/(2*torch.exp(std).clamp(min=1e-4)) - torch.log(torch.sqrt(2*math.pi*torch.exp(std)))
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    mean = mean.to(device)
+    std = std.to(device)
+    actions = actions.to(device)
+    act_log_softmax = -((mean-actions)**2)/(2*torch.exp(std).clamp(min=1e-4).to(device)) - torch.log(torch.sqrt(2*math.pi*torch.exp(std))).to(device)
     return act_log_softmax
 
 def compute_log_policy_prob(memories, nn_policy, device):
@@ -198,7 +211,7 @@ def test_game(tst_env, agent_policy, test_episodes):
         rewards = 0
         steps = 0
         while True:
-            ag_mean = agent_policy(torch.tensor(obs))
+            ag_mean = agent_policy(torch.tensor(obs).to(device)).to(device)
             action = np.clip(ag_mean.data.cpu().numpy().squeeze(), -1, 1)
 
             next_obs, reward, done, _ = tst_env.step(action)
@@ -215,17 +228,17 @@ def test_game(tst_env, agent_policy, test_episodes):
     return np.mean(reward_games), np.mean(steps_games)
 
 
-Memory = namedtuple('Memory', ['obs', 'action', 'new_obs', 'reward', 'done', 'value', 'adv'], verbose=False, rename=False)
+Memory = namedtuple('Memory', ['obs', 'action', 'new_obs', 'reward', 'done', 'value', 'adv'], rename=False)
 
 # Hyperparameters
-ENV_NAME = 'BipedalWalker-v2'
+ENV_NAME = 'BipedalWalker-v3'
 #ENV_NAME = 'BipedalWalkerHardcore-v2'
 
 MAX_ITER = 500000
 
 BATCH_SIZE = 64
 PPO_EPOCHS = 7
-device = 'cpu'
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 CLIP_GRADIENT = 0.2
 CLIP_EPS = 0.2
 
@@ -248,6 +261,7 @@ load_model = False
 checkpoint_name = "checkpoints/..."
 
 if __name__ == '__main__':
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # Create the environment
     env = Env(ENV_NAME, TRAJECTORY_SIZE, GAMMA, GAE_LAMBDA)
 
@@ -256,8 +270,6 @@ if __name__ == '__main__':
 
     # create the test environment
     test_env = gym.make(ENV_NAME)
-    if save_video_test:
-        test_env = gym.wrappers.Monitor(test_env,  "VIDEOS/TEST_VIDEOS_"+writer_name, video_callable=lambda episode_id: episode_id%10==0)
 
     # initialize the actor-critic NN
     agent_policy = A2C_policy(test_env.observation_space.shape, test_env.action_space.shape).to(device)
@@ -283,8 +295,9 @@ if __name__ == '__main__':
     while n_iter < MAX_ITER:
         n_iter += 1
 
+        agent_policy = agent_policy.to(device)
+        agent_value = agent_value.to(device)
         batch = env.steps(agent_policy, agent_value)
-
         # Compute the policy probability with the old policy network
         old_log_policy = compute_log_policy_prob(batch, agent_policy, device)
 
@@ -321,7 +334,7 @@ if __name__ == '__main__':
 
                 pol_loss_acc.append(float(pol_loss))
                 val_loss_acc.append(float(val_loss))
-
+        startTime = time.time()
         # add scalars to the tensorboard
         writer.add_scalar('pg_loss', np.mean(pol_loss_acc), n_iter)
         writer.add_scalar('vl_loss', np.mean(val_loss_acc), n_iter)
@@ -333,6 +346,9 @@ if __name__ == '__main__':
             test_rews, test_stps = test_game(test_env, agent_policy, test_episodes)
             print(' > Testing..', n_iter,test_rews, test_stps)
             # if it achieve the best results so far, save the models
+            f =  open('rewardsNewPPOtest.json', 'a')
+            json.dump({"iter":n_iter,"time":time.time()-startTime,"meanReward":int(test_rews)},f)
+            f.close()
             if test_rews > best_test_result:
                 torch.save({
                     'agent_policy': agent_policy.state_dict(),
@@ -340,7 +356,7 @@ if __name__ == '__main__':
                     'optimizer_policy': optimizer_policy.state_dict(),
                     'optimizer_value': optimizer_value.state_dict(),
                     'test_reward': test_rews
-                }, 'checkpoints/checkpoint_'+writer_name+'.pth.tar')
+                }, '/content/drive/MyDrive/newPPOsavings/'+writer_name+'.pth.tar')
                 best_test_result = test_rews
                 print('=> Best test!! Reward:{:.2f}  Steps:{}'.format(test_rews, test_stps))
 
