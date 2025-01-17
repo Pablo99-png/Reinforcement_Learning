@@ -552,4 +552,10 @@ $RECYCLE.BIN/
 # Windows shortcuts
 *.lnk
 
+# Ignore everything
+*
+
+# Except the file named newPPO.py
+!newPPO.py
+
 # End of https://www.toptal.com/developers/gitignore/api/python,jupyternotebooks,macos,windows,latex
