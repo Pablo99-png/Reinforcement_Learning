@@ -3,10 +3,31 @@ import numpy as np
 from copy import deepcopy
 import matplotlib.pyplot as plt
 import time
+
+import torch
+import torch.nn as nn
+import json
 #weight initializations
 #uniform_distribution
 #he_init(uniform and normal)
 #Xavier/glorot_distribution(normal and uniform)
+
+class AgentNN(nn.Module): #its the Agent network in the ES, and the PolicyNetwork in the PPO 
+    def __init__(self, n_inputs, n_hidden, n_outputs):
+        super(AgentNN, self).__init__()
+        self.fc1 = nn.Linear(n_inputs, n_hidden)
+        self.fc2 = nn.Linear(n_hidden, n_outputs)
+    
+    def loadFromTensors(self, W1, W2, b1, b2):
+        self.fc1.weight = nn.Parameter(W1)
+        self.fc2.weight = nn.Parameter(W2)
+        self.fc1.bias = nn.Parameter(b1)
+        self.fc2.bias = nn.Parameter(b2)
+    
+    def forward(self, x):
+        x = F.tanh(self.fc1(x))
+        x = F.tanh(self.fc2(x))
+        return x
 
 def glorot_uniform(n_inputs,n_outputs,multiplier=1.0):
     ''' Glorot uniform initialization '''
@@ -68,7 +89,7 @@ def run_trial(env,agent,verbose=False):
         done = False
         while not done:
             #print(env.step(agent.act(state)))
-            state, reward, _, done, _ = env.step(agent.act(state))
+            state, reward, _, done = env.step(agent.act(state))
             if reward >= 100:
                 env.render()
 #             if verbose: env.render()
@@ -122,18 +143,34 @@ def main():
     n_generations = 80
     #create agents(as per population size)
     population = [Agent(n_inputs,n_hidden,n_actions,mutate_rate,multiplier) for i in range(pop_size)]
+    BESTMODEL = population[0]
+
+
     #run all agents in the population
     scores = [run_trial(env,agent) for agent in population]
     #choose the best agent from the above trial and store it as best agent.
     best = [deepcopy(population[np.argmax(scores)])]
     #create new generation and repeat for n generations
     a = time.time()
+    bestScore = -10000000000
     for generation in range(n_generations):
 
         #create next generation fromcurrent poulation and scores.
         population,scores = next_generation(env,population, scores,softmax_temp)
         best.append(deepcopy(population[np.argmax(scores)]))
         print("Generation:",generation,"Best score:",np.max(scores), "Time:", time.time()-a )
+        if np.max(scores) > bestScore:
+          BESTMODEL = population[np.argmax(scores)]
+          w1,w2,b1,b2 = torch.from_numpy(BESTMODEL.network['Layer 1']),torch.from_numpy(BESTMODEL.network['Layer 2']),torch.from_numpy(BESTMODEL.network['Bias 1']),torch.from_numpy(BESTMODEL.network['Bias 2'])
+          saveAgent = AgentNN(24,512,4)
+          saveAgent.loadFromTensors(W1=w1,W2=w2,b1=b1,b2=b2)
+          torch.save(saveAgent.state_dict(), f'/content/drive/MyDrive/RL_FINAL/bestAgentES.pt')   
+          bestScore = np.max(scores)
+          print(f'new best model saved{bestScore}')
+        f =  open('/content/drive/MyDrive/RL_FINAL/REWARDS_ES.json', 'a')
+        json.dump({"generation":generation,"time":time.time()-a,"best_reward":np.max(scores)},f)       
+        f.close()
+
         genlist+=[generation]
         rewardlist+=[np.max(scores)]
         xpoints = np.array(genlist)
