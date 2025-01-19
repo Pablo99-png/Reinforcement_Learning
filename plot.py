@@ -1,5 +1,6 @@
 import json
 import matplotlib.pyplot as plt
+import numpy as np
 
 def read_json_file(file_path):
     elements = []
@@ -16,26 +17,40 @@ def correct_json_file(file_path, switch_name=False):
                 n_s = n_s.replace('meanReward', 'best_reward')
             file2.write(n_s)
 
-def plot_data(data):
+def plot_data(data, ppo):
     rewards = [item['best_reward'] for item in data]
     times = [item['time'] for item in data]
-    
-    plt.plot(times, rewards, marker='o')
+
+    if ppo:
+      newTimes = [sum(times[:i]) for i in range(len(times))]
+      newTimes = [newTimes[i*10] for i in range(len(times)//10) ] #da levare
+      rewards = [rewards[i*10] for i in range(len(rewards)//10)] #da levare
+      
+    else:
+      newTimes = times
+    if ppo:
+      plt.plot(newTimes, rewards, label='PPO',marker='o', markersize=3)
+    else:
+      plt.plot(times, rewards, label='ES',marker='o', markersize=3)
+    plt.legend()
     plt.xlabel('Time')
     plt.ylabel('Reward')
     plt.title('Reward vs Time')
     plt.grid(True)
-    plt.show()
 
 if __name__ == "__main__":
     # ES
-    file_path = './DIP_ES/REWARDS_ES.json'  # Replace with your JSON file path
+    file_path = '/content/drive/MyDrive/RL_FINAL/REWARDS_ES.json'  # Replace with your JSON file path
     correct_json_file(file_path)
     data = read_json_file(file_path.replace('.json', '_mod.json'))
-    plot_data(data)
+    plot_data(data,False)
 
     # PPO
-    file_path = './DIP_PPO/REWARDS_PPO.json'  # Replace with your JSON file path
+    file_path = '/content/drive/MyDrive/RL_FINAL/REWARDS_PPO.json'  # Replace with your JSON file path
     correct_json_file(file_path, switch_name=True)
     data = read_json_file(file_path.replace('.json', '_mod.json'))
-    plot_data(data)
+    plot_data(data,True)
+
+
+
+    plt.show()
